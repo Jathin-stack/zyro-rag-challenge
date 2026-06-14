@@ -10,13 +10,17 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 
 # -------------------------------------------------
-# Environment Variables
+# Environment Variables & Secrets
 # -------------------------------------------------
 
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
-# Replace with your Groq API key
-os.environ["GROQ_API_KEY"] = "YOUR_GROQ_API_KEY"
+# Securely fetches the API key from Streamlit Secrets
+if "GROQ_API_KEY" in st.secrets:
+    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+else:
+    st.error("Please configure your GROQ_API_KEY in Streamlit Secrets.")
+    st.stop()
 
 # -------------------------------------------------
 # Streamlit Config
@@ -40,12 +44,18 @@ st.markdown(
 
 @st.cache_resource
 def load_rag_pipeline():
-
     CORPUS_PATH = "hr_pdfs"
-
+    
+    # Safeguard: Create the folder if it doesn't exist
+    if not os.path.exists(CORPUS_PATH):
+        os.makedirs(CORPUS_PATH)
+        
     loader = PyPDFDirectoryLoader(CORPUS_PATH)
-
     documents = loader.load()
+
+    # Safeguard: If no documents are found, return None to prevent IndexError
+    if not documents:
+        return None
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -112,27 +122,10 @@ prompt = ChatPromptTemplate.from_template(prompt_template)
 # -------------------------------------------------
 
 HR_KEYWORDS = [
-    "leave",
-    "salary",
-    "payroll",
-    "benefits",
-    "attendance",
-    "holiday",
-    "remote",
-    "policy",
-    "employee",
-    "insurance",
-    "travel",
-    "reimbursement",
-    "promotion",
-    "resignation",
-    "termination",
-    "maternity",
-    "paternity",
-    "hr",
-    "vacation",
-    "sick leave",
-    "work from home"
+    "leave", "salary", "payroll", "benefits", "attendance", "holiday", 
+    "remote", "policy", "employee", "insurance", "travel", "reimbursement", 
+    "promotion", "resignation", "termination", "maternity", "paternity", 
+    "hr", "vacation", "sick leave", "work from home"
 ]
 
 REFUSAL_MESSAGE = (
@@ -141,9 +134,7 @@ REFUSAL_MESSAGE = (
 )
 
 def is_hr_question(question):
-
     question = question.lower()
-
     return any(keyword in question for keyword in HR_KEYWORDS)
 
 # -------------------------------------------------
@@ -151,9 +142,11 @@ def is_hr_question(question):
 # -------------------------------------------------
 
 def ask_hr_bot(question):
-
     if not is_hr_question(question):
         return REFUSAL_MESSAGE, []
+
+    if retriever is None:
+        return "The HR knowledge base is currently empty. Please add PDF documents to the 'hr_pdfs' directory.", []
 
     docs = retriever.invoke(question)
 
@@ -173,18 +166,15 @@ def ask_hr_bot(question):
     })
 
     sources = []
-
     for doc in docs:
-
         source = doc.metadata.get("source", "Unknown")
-
         if source not in sources:
             sources.append(source)
 
     return response.content, sources
 
 # -------------------------------------------------
-# Chat History
+# Chat History & Interface Rendering
 # -------------------------------------------------
 
 if "messages" not in st.session_state:
@@ -192,18 +182,17 @@ if "messages" not in st.session_state:
 
 # Display old messages
 for msg in st.session_state.messages:
-
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# -------------------------------------------------
-# Chat Input
-# -------------------------------------------------
+# If no documents exist in the folder, show a warning notification
+if retriever is None:
+    st.warning("⚠️ No documents found in the `hr_pdfs` folder. Please commit some PDF files to this directory in your GitHub repository to enable the assistant.")
 
-user_question = st.chat_input("Ask an HR question...")
+# Chat Input
+user_question = st.chat_input("Ask an HR question...", disabled=(retriever is None))
 
 if user_question:
-
     st.session_state.messages.append(
         {"role": "user", "content": user_question}
     )
@@ -212,17 +201,12 @@ if user_question:
         st.markdown(user_question)
 
     with st.chat_message("assistant"):
-
         with st.spinner("Searching HR policies..."):
-
             answer, sources = ask_hr_bot(user_question)
-
             st.markdown(answer)
 
             if sources:
-
                 st.markdown("### 📚 Sources")
-
                 for src in sources:
                     st.markdown(f"- `{src}`")
 
